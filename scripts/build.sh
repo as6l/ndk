@@ -93,14 +93,18 @@ tr '\0' '\n' < prune.list | tee prune.log | head -n 50; echo "共精简 $(tr -cd
 xargs -0 -r rm -rf < prune.list
 find "$OUT" -type d -empty -delete
 
-# 5d. 修复 shebang:/bin/sh、/usr/bin/env bash 等 -> $TP/bin/xxx(Termux 没有 /bin、/usr/bin)
+# 5d. 修复 shebang:所有 sh/bash/dash -> /system/bin/sh;其余(python 等)-> $TP/bin/xxx
 find "$OUT" -type f -not -path '*/sysroot/*' -not -path '*/lib/clang/*' -print0 |
 while IFS= read -r -d '' f; do
   [ "$(head -c2 "$f")" = '#!' ] || continue
   sed -i -E '1{
-    s|^#![[:space:]]*/usr/bin/env[[:space:]]+(-S[[:space:]]+)?([^[:space:]]+)|#!'"$TP"'/bin/\2|
+    s@^#![[:space:]]*/usr/bin/env[[:space:]]+(-S[[:space:]]+)?(ba|da|a)?sh([[:space:]]|$)@#!/system/bin/sh\3@
     t
-    s|^#![[:space:]]*/(usr/)?(s?bin)/([^[:space:]]+)|#!'"$TP"'/bin/\3|
+    s@^#![[:space:]]*/(usr/)?(s?bin)/(ba|da|a)?sh([[:space:]]|$)@#!/system/bin/sh\4@
+    t
+    s@^#![[:space:]]*/usr/bin/env[[:space:]]+(-S[[:space:]]+)?([^[:space:]]+)@#!'"$TP"'/bin/\2@
+    t
+    s@^#![[:space:]]*/(usr/)?(s?bin)/([^[:space:]]+)@#!'"$TP"'/bin/\3@
   }' "$f"
 done
 grep -rIl --exclude-dir=sysroot '^#!' "$OUT" | head -n 5 | while read -r f; do echo "$f: $(head -n1 "$f")"; done
