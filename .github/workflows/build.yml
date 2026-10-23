@@ -2,9 +2,10 @@ name: build-ndk-aarch64-android
 on:
   workflow_dispatch:
     inputs:
-      ndk_ver: { description: "官方 NDK 版本", default: "r27c" }
-      llvm_tag: { description: "LLVM tag", default: "llvmorg-18.1.8" }
+      ndk_ver: { description: "官方 NDK 版本", default: "r30" }
+      llvm_tag: { description: "LLVM tag", default: "llvmorg-22.1.8" }
       host_api: { description: "主机最低 Android API", default: "26" }
+      shebang_prefix: { description: "shebang 改写目标前缀", default: "/data/data/com.termux/files/usr" }
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -26,6 +27,7 @@ jobs:
           NDK_VER: ${{ inputs.ndk_ver }}
           LLVM_TAG: ${{ inputs.llvm_tag }}
           HOST_API: ${{ inputs.host_api }}
+          SHEBANG_PREFIX: ${{ inputs.shebang_prefix }}
           WORK: ${{ github.workspace }}/work
           CCACHE_MAXSIZE: 4G
         run: ./scripts/build.sh

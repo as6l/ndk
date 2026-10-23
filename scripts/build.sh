@@ -6,9 +6,10 @@
 #   3. 拼装:替换主机二进制,删除所有非 aarch64 的目标文件
 set -euxo pipefail
 
-NDK_VER="${NDK_VER:-r27c}"
-LLVM_TAG="${LLVM_TAG:-llvmorg-18.1.8}"   # r27c 内置 clang 18.0.x,resource dir 同为 lib/clang/18
+NDK_VER="${NDK_VER:-r30}"
+LLVM_TAG="${LLVM_TAG:-llvmorg-22.1.8}"   # r30 内置 clang-r574158c(LLVM 22),resource dir 为 lib/clang/22
 HOST_API="${HOST_API:-26}"               # 生成的 clang 运行所需的最低 Android API
+TP="${SHEBANG_PREFIX:-/data/data/com.termux/files/usr}"   # shebang 改写目标(Termux 的 $PREFIX)
 W="${WORK:-$PWD/work}"
 mkdir -p "$W" && cd "$W"
 
@@ -57,35 +58,52 @@ OUT="$W/android-ndk-${NDK_VER}-aarch64"
 rm -rf "$OUT" && cp -a "$OFFICIAL" "$OUT"
 P="$OUT/toolchains/llvm/prebuilt/linux-x86_64"
 
-# 5a. 删除所有主机端 x86_64 ELF 与主机库,仅保留 shell/py 脚本与 lib/clang
-find "$OUT" -type f -exec sh -c 'head -c4 "$1" | grep -q "^.ELF"' _ {} \; -print -delete
+# 5a. 删除主机端 x86_64 ELF(注意:不碰 sysroot 与 lib/clang,里面的 .so/.o 是 aarch64 目标文件)
+find "$OUT" -type f -not -path '*/sysroot/*' -not -path '*/lib/clang/*' -print0 |
+while IFS= read -r -d '' f; do
+  [ "$(head -c4 "$f" | tail -c3)" = "ELF" ] && rm -f "$f"
+done
+find "$OUT" -xtype l -delete            # 清理指向已删除 ELF 的悬空软链(如 clang -> clang-NN)
 mv "$P/lib/clang" "$W/_clang" && rm -rf "$P/lib" "$P/python3" && mkdir -p "$P/lib" && mv "$W/_clang" "$P/lib/clang"
-rm -rf "$OUT"/prebuilt "$OUT"/shader-tools "$OUT"/simpleperf "$OUT"/python-packages "$OUT"/toolchains/llvm/prebuilt/linux-x86_64/musl 2>/dev/null || true
+rm -rf "$OUT/prebuilt" "$OUT/shader-tools" "$OUT/simpleperf" "$OUT/python-packages"
 
-# 5b. 放入 aarch64-android 主机工具
+# 5b. 放入 aarch64-android 主机工具(cp -L 解引用,保证 clang 是真实文件而不是指向 clang-NN 的软链)
 B="$W/build-android/bin"
-for t in $TOOLS; do cp -a "$B/$t" "$P/bin/"; done
+REAL="clang lld llvm-ar llvm-nm llvm-objcopy llvm-objdump llvm-readobj llvm-symbolizer llvm-cxxfilt llvm-size llvm-strings llvm-profdata llvm-cov llvm-as llvm-dis"
+mkdir -p "$P/bin"
+for t in $REAL; do cp -fL --remove-destination "$B/$t" "$P/bin/$t"; done
 aarch64-linux-gnu-strip --strip-unneeded "$P"/bin/* 2>/dev/null || true
+CLANGVER=$(ls "$P/lib/clang" | sort -n | tail -1)
+OURVER=$(ls "$W/build-android/lib/clang" | sort -n | tail -1)
+[ "$CLANGVER" = "$OURVER" ] || echo "::warning::resource dir 版本不一致: 官方 NDK=$CLANGVER, 自编 clang=$OURVER, 请调整 LLVM_TAG"
 cd "$P/bin"
-ln -sf clang clang++ ; ln -sf clang clang-cpp; ln -sf lld ld.lld; ln -sf lld ld
+for l in clang++ clang-cpp "clang-${CLANGVER}"; do ln -sf clang "$l"; done      # clang* 全部指向 clang(真实文件)
+ln -sf lld ld.lld; ln -sf lld ld
+ln -sf llvm-ar llvm-ranlib; ln -sf llvm-objcopy llvm-strip
 ln -sf llvm-readobj llvm-readelf; ln -sf llvm-symbolizer llvm-addr2line
-ln -sf llvm-objcopy llvm-strip 2>/dev/null || true
-CLANGVER=$(ls "$P/lib/clang")
-for t in clang clang++; do ln -sf "$t" "${t}-${CLANGVER}"; done
-cd "$P"; ln -sfn . ../prebuilt-aarch64 2>/dev/null || true
+# ndk-build 要找 prebuilt/<host>/bin/make:指向 Termux 的 make(悬空软链,在设备上有效)
+mkdir -p "$OUT/prebuilt/linux-x86_64/bin" && ln -sf "$TP/bin/make" "$OUT/prebuilt/linux-x86_64/bin/make"
 ln -sfn linux-x86_64 "$OUT/toolchains/llvm/prebuilt/linux-aarch64"
 
-# 5c. 只保留 aarch64 目标文件
-cd "$P/sysroot/usr"
-for d in arm-linux-androideabi i686-linux-android x86_64-linux-android riscv64-linux-android; do
-  rm -rf "lib/$d" "include/$d"
+# 5c. 用 find 按关键字精简其他架构(只匹配文件/目录名;linux-x86_64 / linux-aarch64 / arm64* 除外)
+cd "$W"
+find "$OUT" -depth \( -iname '*riscv*' -o -iname '*x86*' -o -iname '*arm*' -o -iname '*i686*' -o -iname '*i386*' \) \
+  ! -iname '*arm64*' ! -name 'linux-x86_64' ! -name 'linux-aarch64' -print0 > prune.list
+tr '\0' '\n' < prune.list | tee prune.log | head -n 50; echo "共精简 $(tr -cd '\0' < prune.list | wc -c) 项,完整列表见 prune.log"
+xargs -0 -r rm -rf < prune.list
+find "$OUT" -type d -empty -delete
+
+# 5d. 修复 shebang:/bin/sh、/usr/bin/env bash 等 -> $TP/bin/xxx(Termux 没有 /bin、/usr/bin)
+find "$OUT" -type f -not -path '*/sysroot/*' -not -path '*/lib/clang/*' -print0 |
+while IFS= read -r -d '' f; do
+  [ "$(head -c2 "$f")" = '#!' ] || continue
+  sed -i -E '1{
+    s|^#![[:space:]]*/usr/bin/env[[:space:]]+(-S[[:space:]]+)?([^[:space:]]+)|#!'"$TP"'/bin/\2|
+    t
+    s|^#![[:space:]]*/(usr/)?(s?bin)/([^[:space:]]+)|#!'"$TP"'/bin/\3|
+  }' "$f"
 done
-rm -rf "$P"/sysroot/usr/lib64 2>/dev/null || true
-find "$P/lib/clang" -type f \( -name '*arm*' -o -name '*i686*' -o -name '*x86_64*' -o -name '*riscv*' -o -name '*i386*' -o -name '*hwasan-riscv*' \) \
-  ! -name '*aarch64*' -delete
-find "$P/lib/clang" -type d -empty -delete
-rm -rf "$OUT"/sources/cxx-stl 2>/dev/null || true
-# 删除 c++ 头中其他架构的 __config_site 目录(libc++ 头在 include/c++/v1,已通用)
+grep -rIl --exclude-dir=sysroot '^#!' "$OUT" | head -n 5 | while read -r f; do echo "$f: $(head -n1 "$f")"; done
 
 # ---------- 6. 打包 ----------
 cd "$W" && tar -cJf "android-ndk-${NDK_VER}-aarch64-android.tar.xz" "$(basename "$OUT")"
