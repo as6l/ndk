@@ -25,6 +25,8 @@ LLVM_PREBUILT="$OFFICIAL/toolchains/llvm/prebuilt/linux-x86_64"
 
 # ---------- 3. 本机 tablegen ----------
 cmake -G Ninja -S llvm-project/llvm -B build-native \
+  -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ \
+  -DCMAKE_CXX_FLAGS="-include cstdint" \
   -DCMAKE_BUILD_TYPE=Release -DLLVM_ENABLE_PROJECTS=clang \
   -DLLVM_TARGETS_TO_BUILD=X86 -DLLVM_INCLUDE_TESTS=OFF \
   -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache

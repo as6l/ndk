@@ -14,7 +14,7 @@ jobs:
       - name: 释放磁盘并安装依赖
         run: |
           sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android /opt/hostedtoolcache/CodeQL
-          sudo apt-get update && sudo apt-get install -y ninja-build ccache cmake unzip xz-utils binutils-aarch64-linux-gnu
+          sudo apt-get update && sudo apt-get install -y ninja-build ccache cmake clang lld unzip xz-utils binutils-aarch64-linux-gnu
           df -h /
       - uses: actions/cache@v4
         with:
