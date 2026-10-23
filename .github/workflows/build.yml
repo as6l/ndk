@@ -1,0 +1,36 @@
+name: build-ndk-aarch64-android
+on:
+  workflow_dispatch:
+    inputs:
+      ndk_ver: { description: "官方 NDK 版本", default: "r27c" }
+      llvm_tag: { description: "LLVM tag", default: "llvmorg-18.1.8" }
+      host_api: { description: "主机最低 Android API", default: "26" }
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v4
+      - name: 释放磁盘并安装依赖
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android /opt/hostedtoolcache/CodeQL
+          sudo apt-get update && sudo apt-get install -y ninja-build ccache cmake unzip xz-utils binutils-aarch64-linux-gnu
+          df -h /
+      - uses: actions/cache@v4
+        with:
+          path: ~/.ccache
+          key: ccache-${{ inputs.llvm_tag }}-${{ github.run_id }}
+          restore-keys: ccache-${{ inputs.llvm_tag }}-
+      - name: Build
+        env:
+          NDK_VER: ${{ inputs.ndk_ver }}
+          LLVM_TAG: ${{ inputs.llvm_tag }}
+          HOST_API: ${{ inputs.host_api }}
+          WORK: ${{ github.workspace }}/work
+          CCACHE_MAXSIZE: 4G
+        run: ./scripts/build.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android-ndk-aarch64-android
+          path: work/*.tar.xz
+          compression-level: 0
