@@ -93,7 +93,20 @@ tr '\0' '\n' < prune.list | tee prune.log | head -n 50; echo "共精简 $(tr -cd
 xargs -0 -r rm -rf < prune.list
 find "$OUT" -type d -empty -delete
 
-# 5d. 修复 shebang:所有 sh/bash/dash -> /system/bin/sh;其余(python 等)-> $TP/bin/xxx
+# 5c2. 去掉 Python 相关:*.py / __pycache__ / python 为解释器的脚本 / 依赖 python 的包装脚本(ndk-gdb、ndk-stack 等)
+find "$OUT" -type d \( -name '__pycache__' -o -name 'python*' \) -not -path '*/sysroot/*' -prune -exec rm -rf {} + 2>/dev/null || true
+find "$OUT" -type f \( -name '*.py' -o -name '*.pyc' -o -name '*.pyi' \) -not -path '*/sysroot/*' -print -delete > "$W/python-removed.log"
+find "$OUT" -type f -not -path '*/sysroot/*' -not -path '*/lib/clang/*' -print0 |
+while IFS= read -r -d '' f; do
+  [ "$(head -c2 "$f")" = '#!' ] && head -n1 "$f" | grep -q python && { echo "$f" >> "$W/python-removed.log"; rm -f "$f"; }
+done
+for f in "$OUT"/* "$P/bin"/*; do   # 顶层/bin 里仍引用 python 的包装脚本
+  [ -f "$f" ] && [ ! -L "$f" ] && head -c2 "$f" | grep -q '#!' && grep -qi python "$f" && { echo "$f" >> "$W/python-removed.log"; rm -f "$f"; }
+done
+echo "已移除 $(wc -l < "$W/python-removed.log") 个 Python 相关文件(见 python-removed.log)"
+find "$OUT" -xtype l -delete; find "$OUT" -type d -empty -delete
+
+# 5d. 修复 shebang:所有 sh/bash/dash -> /system/bin/sh;其余 -> $TP/bin/xxx
 find "$OUT" -type f -not -path '*/sysroot/*' -not -path '*/lib/clang/*' -print0 |
 while IFS= read -r -d '' f; do
   [ "$(head -c2 "$f")" = '#!' ] || continue
