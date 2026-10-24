@@ -8,7 +8,7 @@ set -euxo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"   # 必须在 cd 之前取,否则相对路径的 $0 会失效
 
 NDK_VER="${NDK_VER:-r30}"
-LLVM_TAG="${LLVM_TAG:-llvmorg-22.1.8}"   # r30 内置 clang-r574158c(LLVM 22),resource dir 为 lib/clang/22
+LLVM_TAG="${LLVM_TAG:-llvmorg-21.1.8}"   # 主版本必须与官方 NDK 的 lib/clang/<N> 一致(r30 为 21)
 HOST_API="${HOST_API:-26}"               # 生成的 clang 运行所需的最低 Android API
 TP="${SHEBANG_PREFIX:-/data/data/com.termux/files/usr}"   # shebang 改写目标(Termux 的 $PREFIX)
 W="${WORK:-$PWD/work}"
@@ -20,6 +20,13 @@ if [ ! -d ndk-official ]; then
   unzip -q ndk.zip && mv android-ndk-* ndk-official && rm ndk.zip
 fi
 OFFICIAL="$W/ndk-official"
+# 编译前先校验:自编 clang 的 resource dir(lib/clang/<主版本>)必须与官方 NDK 里的一致,否则找不到内置头文件/compiler-rt
+OFFICIAL_VER=$(ls "$OFFICIAL/toolchains/llvm/prebuilt/linux-x86_64/lib/clang" | sort -n | tail -1)
+TAG_MAJOR=${LLVM_TAG#llvmorg-}; TAG_MAJOR=${TAG_MAJOR%%.*}
+if [ "$OFFICIAL_VER" != "$TAG_MAJOR" ]; then
+  echo "::error::LLVM_TAG=$LLVM_TAG 主版本 $TAG_MAJOR 与官方 NDK $NDK_VER 的 resource dir ($OFFICIAL_VER) 不一致,请改用 llvmorg-${OFFICIAL_VER}.x"
+  exit 1
+fi
 
 # ---------- 2. 编译(tools-cache 命中则整段跳过) ----------
 if [ -f "$W/tools-cache/DONE" ]; then
@@ -50,7 +57,7 @@ mkdir -p "$P/bin"
 for t in $REAL; do cp -fL --remove-destination "$B/$t" "$P/bin/$t"; done
 CLANGVER=$(ls "$P/lib/clang" | sort -n | tail -1)
 OURVER=$(cat "$W/tools-cache/clang-resource-version")
-[ "$CLANGVER" = "$OURVER" ] || echo "::warning::resource dir 版本不一致: 官方 NDK=$CLANGVER, 自编 clang=$OURVER, 请调整 LLVM_TAG"
+[ "$CLANGVER" = "$OURVER" ] || { echo "::error::resource dir 版本不一致: 官方 NDK=$CLANGVER, 自编 clang=$OURVER"; exit 1; }
 cd "$P/bin"
 for l in clang++ clang-cpp "clang-${CLANGVER}"; do ln -sf clang "$l"; done      # clang* 全部指向 clang(真实文件)
 ln -sf lld ld.lld; ln -sf lld ld

@@ -3,7 +3,7 @@ on:
   workflow_dispatch:
     inputs:
       ndk_ver: { description: "官方 NDK 版本", default: "r30" }
-      llvm_tag: { description: "LLVM tag", default: "llvmorg-22.1.8" }
+      llvm_tag: { description: "LLVM tag", default: "llvmorg-21.1.8" }
       host_api: { description: "主机最低 Android API", default: "26" }
       shebang_prefix: { description: "shebang 改写目标前缀", default: "/data/data/com.termux/files/usr" }
       force_compile: { description: "忽略缓存,强制重新编译", type: boolean, default: false }
