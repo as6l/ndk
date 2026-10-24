@@ -5,6 +5,7 @@
 #   2. 从 LLVM 源码交叉编译出 aarch64-linux-android 主机端的 clang / lld / llvm-* 工具(仅 AArch64 后端)
 #   3. 拼装:替换主机二进制,删除所有非 aarch64 的目标文件
 set -euxo pipefail
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"   # 必须在 cd 之前取,否则相对路径的 $0 会失效
 
 NDK_VER="${NDK_VER:-r30}"
 LLVM_TAG="${LLVM_TAG:-llvmorg-22.1.8}"   # r30 内置 clang-r574158c(LLVM 22),resource dir 为 lib/clang/22
@@ -25,7 +26,7 @@ if [ -f "$W/tools-cache/DONE" ]; then
   echo "tools-cache 命中,跳过编译"
 else
   export W OFFICIAL LLVM_TAG HOST_API
-  bash "$(dirname "$(readlink -f "$0")")/compile.sh"
+  bash "$SCRIPT_DIR/compile.sh"
 fi
 
 # ---------- 5. 拼装 ----------
