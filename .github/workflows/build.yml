@@ -6,22 +6,42 @@ on:
       llvm_tag: { description: "LLVM tag", default: "llvmorg-22.1.8" }
       host_api: { description: "主机最低 Android API", default: "26" }
       shebang_prefix: { description: "shebang 改写目标前缀", default: "/data/data/com.termux/files/usr" }
+      force_compile: { description: "忽略缓存,强制重新编译", type: boolean, default: false }
 jobs:
   build:
     runs-on: ubuntu-latest
     timeout-minutes: 360
+    env:
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_MAXSIZE: 5G
+      CCACHE_COMPRESS: "1"
     steps:
       - uses: actions/checkout@v4
+
+      # 1) 编译产物缓存:key 只和 llvm_tag / host_api / compile.sh 内容有关,改拼装逻辑不会让它失效
+      - name: 恢复编译产物缓存
+        id: tools
+        if: ${{ !inputs.force_compile }}
+        uses: actions/cache/restore@v4
+        with:
+          path: work/tools-cache
+          key: tools-${{ inputs.llvm_tag }}-api${{ inputs.host_api }}-${{ hashFiles('scripts/compile.sh') }}
+
+      # 2) 仅在需要编译时才恢复 ccache(失败的编译也能续上)
+      - name: 恢复 ccache
+        if: steps.tools.outputs.cache-hit != 'true'
+        uses: actions/cache/restore@v4
+        with:
+          path: .ccache
+          key: ccache-${{ inputs.llvm_tag }}-${{ github.run_id }}
+          restore-keys: ccache-${{ inputs.llvm_tag }}-
+
       - name: 释放磁盘并安装依赖
         run: |
           sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android /opt/hostedtoolcache/CodeQL
           sudo apt-get update && sudo apt-get install -y ninja-build ccache cmake clang lld unzip xz-utils binutils-aarch64-linux-gnu
           df -h /
-      - uses: actions/cache@v4
-        with:
-          path: ~/.ccache
-          key: ccache-${{ inputs.llvm_tag }}-${{ github.run_id }}
-          restore-keys: ccache-${{ inputs.llvm_tag }}-
+
       - name: Build
         env:
           NDK_VER: ${{ inputs.ndk_ver }}
@@ -29,8 +49,23 @@ jobs:
           HOST_API: ${{ inputs.host_api }}
           SHEBANG_PREFIX: ${{ inputs.shebang_prefix }}
           WORK: ${{ github.workspace }}/work
-          CCACHE_MAXSIZE: 4G
         run: ./scripts/build.sh
+
+      # 3) 编译成功就立刻保存(即使后面拼装失败也不丢),不依赖整个 job 成功
+      - name: 保存编译产物缓存
+        if: always() && steps.tools.outputs.cache-hit != 'true' && hashFiles('work/tools-cache/DONE') != ''
+        uses: actions/cache/save@v4
+        with:
+          path: work/tools-cache
+          key: tools-${{ inputs.llvm_tag }}-api${{ inputs.host_api }}-${{ hashFiles('scripts/compile.sh') }}
+
+      - name: 保存 ccache(编译失败/超时也保存)
+        if: always() && steps.tools.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: .ccache
+          key: ccache-${{ inputs.llvm_tag }}-${{ github.run_id }}
+
       - uses: actions/upload-artifact@v4
         with:
           name: android-ndk-aarch64-android

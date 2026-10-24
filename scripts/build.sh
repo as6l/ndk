@@ -19,39 +19,14 @@ if [ ! -d ndk-official ]; then
   unzip -q ndk.zip && mv android-ndk-* ndk-official && rm ndk.zip
 fi
 OFFICIAL="$W/ndk-official"
-LLVM_PREBUILT="$OFFICIAL/toolchains/llvm/prebuilt/linux-x86_64"
 
-# ---------- 2. LLVM 源码 ----------
-[ -d llvm-project ] || git clone --depth 1 --branch "$LLVM_TAG" https://github.com/llvm/llvm-project.git
-
-# ---------- 3. 本机 tablegen ----------
-cmake -G Ninja -S llvm-project/llvm -B build-native \
-  -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ \
-  -DCMAKE_CXX_FLAGS="-include cstdint" \
-  -DCMAKE_BUILD_TYPE=Release -DLLVM_ENABLE_PROJECTS=clang \
-  -DLLVM_TARGETS_TO_BUILD=X86 -DLLVM_INCLUDE_TESTS=OFF \
-  -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
-ninja -C build-native llvm-tblgen llvm-min-tblgen clang-tblgen
-
-# ---------- 4. 交叉编译 aarch64-android 主机工具 ----------
-cmake -G Ninja -S llvm-project/llvm -B build-android \
-  -DCMAKE_TOOLCHAIN_FILE="$OFFICIAL/build/cmake/android.toolchain.cmake" \
-  -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM="android-${HOST_API}" -DANDROID_STL=c++_static \
-  -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_FLAGS_RELEASE="-O2 -g0 -DNDEBUG" -DCMAKE_CXX_FLAGS_RELEASE="-O2 -g0 -DNDEBUG" \
-  -DLLVM_HOST_TRIPLE=aarch64-linux-android -DLLVM_DEFAULT_TARGET_TRIPLE=aarch64-linux-android \
-  -DLLVM_NATIVE_TOOL_DIR="$W/build-native/bin" -DCLANG_TABLEGEN="$W/build-native/bin/clang-tblgen" \
-  -DLLVM_ENABLE_PROJECTS="clang;lld" -DLLVM_TARGETS_TO_BUILD=AArch64 \
-  -DCLANG_DEFAULT_CXX_STDLIB=libc++ -DCLANG_DEFAULT_RTLIB=compiler-rt \
-  -DCLANG_DEFAULT_LINKER=lld -DCLANG_DEFAULT_UNWINDLIB=libunwind \
-  -DLLVM_ENABLE_ZLIB=OFF -DLLVM_ENABLE_ZSTD=OFF -DLLVM_ENABLE_LIBXML2=OFF -DLLVM_ENABLE_TERMINFO=OFF \
-  -DLLVM_ENABLE_PLUGINS=OFF -DLLVM_INCLUDE_TESTS=OFF -DLLVM_INCLUDE_EXAMPLES=OFF \
-  -DLLVM_INCLUDE_BENCHMARKS=OFF -DLLVM_INCLUDE_DOCS=OFF \
-  -DCLANG_ENABLE_ARCMT=OFF -DCLANG_ENABLE_STATIC_ANALYZER=OFF -DCLANG_INCLUDE_TESTS=OFF \
-  -DLLVM_PARALLEL_LINK_JOBS=1 \
-  -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
-TOOLS="clang lld llvm-ar llvm-ranlib llvm-nm llvm-objcopy llvm-strip llvm-objdump llvm-readobj \
-       llvm-symbolizer llvm-cxxfilt llvm-size llvm-strings llvm-profdata llvm-cov llvm-as llvm-dis"
-ninja -C build-android $TOOLS
+# ---------- 2. 编译(tools-cache 命中则整段跳过) ----------
+if [ -f "$W/tools-cache/DONE" ]; then
+  echo "tools-cache 命中,跳过编译"
+else
+  export W OFFICIAL LLVM_TAG HOST_API
+  bash "$(dirname "$(readlink -f "$0")")/compile.sh"
+fi
 
 # ---------- 5. 拼装 ----------
 OUT="$W/android-ndk-${NDK_VER}-aarch64"
@@ -68,13 +43,12 @@ mv "$P/lib/clang" "$W/_clang" && rm -rf "$P/lib" "$P/python3" && mkdir -p "$P/li
 rm -rf "$OUT/prebuilt" "$OUT/shader-tools" "$OUT/simpleperf" "$OUT/python-packages"
 
 # 5b. 放入 aarch64-android 主机工具(cp -L 解引用,保证 clang 是真实文件而不是指向 clang-NN 的软链)
-B="$W/build-android/bin"
+B="$W/tools-cache/bin"
 REAL="clang lld llvm-ar llvm-nm llvm-objcopy llvm-objdump llvm-readobj llvm-symbolizer llvm-cxxfilt llvm-size llvm-strings llvm-profdata llvm-cov llvm-as llvm-dis"
 mkdir -p "$P/bin"
 for t in $REAL; do cp -fL --remove-destination "$B/$t" "$P/bin/$t"; done
-aarch64-linux-gnu-strip --strip-unneeded "$P"/bin/* 2>/dev/null || true
 CLANGVER=$(ls "$P/lib/clang" | sort -n | tail -1)
-OURVER=$(ls "$W/build-android/lib/clang" | sort -n | tail -1)
+OURVER=$(cat "$W/tools-cache/clang-resource-version")
 [ "$CLANGVER" = "$OURVER" ] || echo "::warning::resource dir 版本不一致: 官方 NDK=$CLANGVER, 自编 clang=$OURVER, 请调整 LLVM_TAG"
 cd "$P/bin"
 for l in clang++ clang-cpp "clang-${CLANGVER}"; do ln -sf clang "$l"; done      # clang* 全部指向 clang(真实文件)
