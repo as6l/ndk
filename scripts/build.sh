@@ -61,7 +61,7 @@ P="$OUT/toolchains/llvm/prebuilt/linux-x86_64"
 # 5a. 删除主机端 x86_64 ELF(注意:不碰 sysroot 与 lib/clang,里面的 .so/.o 是 aarch64 目标文件)
 find "$OUT" -type f -not -path '*/sysroot/*' -not -path '*/lib/clang/*' -print0 |
 while IFS= read -r -d '' f; do
-  [ "$(head -c4 "$f" | tail -c3)" = "ELF" ] && rm -f "$f"
+  if [ "$(head -c4 "$f" | tail -c3)" = "ELF" ]; then rm -f "$f"; fi
 done
 find "$OUT" -xtype l -delete            # 清理指向已删除 ELF 的悬空软链(如 clang -> clang-NN)
 mv "$P/lib/clang" "$W/_clang" && rm -rf "$P/lib" "$P/python3" && mkdir -p "$P/lib" && mv "$W/_clang" "$P/lib/clang"
@@ -81,27 +81,30 @@ for l in clang++ clang-cpp "clang-${CLANGVER}"; do ln -sf clang "$l"; done      
 ln -sf lld ld.lld; ln -sf lld ld
 ln -sf llvm-ar llvm-ranlib; ln -sf llvm-objcopy llvm-strip
 ln -sf llvm-readobj llvm-readelf; ln -sf llvm-symbolizer llvm-addr2line
-# ndk-build 要找 prebuilt/<host>/bin/make:指向 Termux 的 make(悬空软链,在设备上有效)
-mkdir -p "$OUT/prebuilt/linux-x86_64/bin" && ln -sf "$TP/bin/make" "$OUT/prebuilt/linux-x86_64/bin/make"
+chmod +x "$P"/bin/* 2>/dev/null || true
 ln -sfn linux-x86_64 "$OUT/toolchains/llvm/prebuilt/linux-aarch64"
 
 # 5c. 用 find 按关键字精简其他架构(只匹配文件/目录名;linux-x86_64 / linux-aarch64 / arm64* 除外)
 cd "$W"
 find "$OUT" -depth \( -iname '*riscv*' -o -iname '*x86*' -o -iname '*arm*' -o -iname '*i686*' -o -iname '*i386*' \) \
   ! -iname '*arm64*' ! -name 'linux-x86_64' ! -name 'linux-aarch64' -print0 > prune.list
-tr '\0' '\n' < prune.list | tee prune.log | head -n 50; echo "共精简 $(tr -cd '\0' < prune.list | wc -c) 项,完整列表见 prune.log"
+tr '\0' '\n' < prune.list > prune.log; head -n 50 prune.log || true; echo "共精简 $(tr -cd '\0' < prune.list | wc -c) 项,完整列表见 prune.log"
 xargs -0 -r rm -rf < prune.list
 find "$OUT" -type d -empty -delete
 
 # 5c2. 去掉 Python 相关:*.py / __pycache__ / python 为解释器的脚本 / 依赖 python 的包装脚本(ndk-gdb、ndk-stack 等)
 find "$OUT" -type d \( -name '__pycache__' -o -name 'python*' \) -not -path '*/sysroot/*' -prune -exec rm -rf {} + 2>/dev/null || true
-find "$OUT" -type f \( -name '*.py' -o -name '*.pyc' -o -name '*.pyi' \) -not -path '*/sysroot/*' -print -delete > "$W/python-removed.log"
+find "$OUT" -type f \( -name '*.py' -o -name '*.pyc' -o -name '*.pyi' \) -not -path '*/sysroot/*' -print -delete > "$W/python-removed.log" || true
 find "$OUT" -type f -not -path '*/sysroot/*' -not -path '*/lib/clang/*' -print0 |
 while IFS= read -r -d '' f; do
-  [ "$(head -c2 "$f")" = '#!' ] && head -n1 "$f" | grep -q python && { echo "$f" >> "$W/python-removed.log"; rm -f "$f"; }
+  if [ "$(head -c2 "$f")" = '#!' ] && head -n1 "$f" | grep -q python; then
+    echo "$f" >> "$W/python-removed.log"; rm -f "$f"
+  fi
 done
 for f in "$OUT"/* "$P/bin"/*; do   # 顶层/bin 里仍引用 python 的包装脚本
-  [ -f "$f" ] && [ ! -L "$f" ] && head -c2 "$f" | grep -q '#!' && grep -qi python "$f" && { echo "$f" >> "$W/python-removed.log"; rm -f "$f"; }
+  if [ -f "$f" ] && [ ! -L "$f" ] && [ "$(head -c2 "$f")" = '#!' ] && grep -qi python "$f"; then
+    echo "$f" >> "$W/python-removed.log"; rm -f "$f"
+  fi
 done
 echo "已移除 $(wc -l < "$W/python-removed.log") 个 Python 相关文件(见 python-removed.log)"
 find "$OUT" -xtype l -delete; find "$OUT" -type d -empty -delete
@@ -120,7 +123,11 @@ while IFS= read -r -d '' f; do
     s@^#![[:space:]]*/(usr/)?(s?bin)/([^[:space:]]+)@#!'"$TP"'/bin/\3@
   }' "$f"
 done
-grep -rIl --exclude-dir=sysroot '^#!' "$OUT" | head -n 5 | while read -r f; do echo "$f: $(head -n1 "$f")"; done
+grep -rIl --exclude-dir=sysroot '^#!' "$OUT" 2>/dev/null | head -n 5 | while read -r f; do echo "$f: $(head -n1 "$f")"; done || true
+
+# 5e. ndk-build 要找 prebuilt/<host>/bin/make:指向设备上的 make(构建机上是悬空软链,必须放在所有清理步骤之后)
+mkdir -p "$OUT/prebuilt/linux-x86_64/bin"
+ln -sf "$TP/bin/make" "$OUT/prebuilt/linux-x86_64/bin/make"
 
 # ---------- 6. 打包 ----------
 cd "$W" && tar -cJf "android-ndk-${NDK_VER}-aarch64-android.tar.xz" "$(basename "$OUT")"
